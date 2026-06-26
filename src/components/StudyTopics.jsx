@@ -144,6 +144,21 @@ export default function StudyTopics() {
     setOpenSections({ 0: true });
   };
 
+  const allOpen = selectedTopic
+    ? selectedTopic.sections.every((_, idx) => !!openSections[idx])
+    : false;
+
+  const toggleAll = () => {
+    if (!selectedTopic) return;
+    if (allOpen) {
+      setOpenSections({});
+    } else {
+      const all = {};
+      selectedTopic.sections.forEach((_, idx) => { all[idx] = true; });
+      setOpenSections(all);
+    }
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.pageHeader}>
@@ -211,6 +226,37 @@ export default function StudyTopics() {
           })()}
 
           <div style={styles.sections}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              paddingTop: 16,
+              paddingBottom: 4,
+            }}>
+              <button
+                onClick={toggleAll}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  background: 'transparent',
+                  border: `1px solid ${selectedTopic.color}40`,
+                  borderRadius: 6,
+                  padding: '4px 12px',
+                  color: selectedTopic.color,
+                  fontSize: '0.75em',
+                  fontFamily: 'var(--font-body)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = `${selectedTopic.color}14`}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <span style={{ fontSize: '0.9em' }}>{allOpen ? '▴' : '▾'}</span>
+                {allOpen ? 'Collapse all' : 'Expand all'}
+              </button>
+            </div>
+
             {selectedTopic.sections.map((section, idx) => {
               const isOpen = !!openSections[idx];
               return (

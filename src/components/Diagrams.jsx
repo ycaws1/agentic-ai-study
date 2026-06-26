@@ -1121,7 +1121,7 @@ export function TransformersDiagram() {
   const cyan = '#06b6d4';
   const green = '#10b981';
   const amber = '#f59e0b';
-  const orange = '#f97316';
+  const pink = '#ec4899';
   const bg = '#0f172a';
   const card = '#1e293b';
   const border = '#334155';
@@ -1129,54 +1129,194 @@ export function TransformersDiagram() {
   const muted = '#94a3b8';
 
   return (
-    <svg viewBox="0 0 780 320" style={{ width: '100%', maxWidth: 780, display: 'block' }}>
-      <rect width="780" height="320" fill={bg} rx="12" />
-      <text x="390" y="26" textAnchor="middle" fill={text} fontSize="13" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">LLM Inference: Prefill → Decode</text>
-
-      {/* Prefill box */}
-      <rect x="20" y="40" width="360" height="200" rx="10" fill={`${cyan}0f`} stroke={cyan} strokeWidth="1.5" />
-      <text x="200" y="62" textAnchor="middle" fill={cyan} fontSize="11" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">PREFILL PHASE</text>
-      <text x="200" y="78" textAnchor="middle" fill={muted} fontSize="8.5" fontFamily="Plus Jakarta Sans,sans-serif">Compute-bound · O(n²) attention</text>
-
-      {['Tokenize + Embed all N tokens', 'Compute Q, K, V for all N (parallel)', 'Full [N×N] causal attention matrix', 'Store K, V → populate KV cache', 'MLP for all N tokens (parallel)', '→ Output: first token + KV cache ready'].map((t, i) => (
-        <g key={i}>
-          <circle cx="48" cy={96 + i * 22} r="4" fill={i === 5 ? green : cyan} opacity="0.8" />
-          <text x="60" y={100 + i * 22} fill={i === 5 ? green : text} fontSize="9" fontFamily="Plus Jakarta Sans,sans-serif">{t}</text>
-        </g>
-      ))}
-      <text x="200" y="242" textAnchor="middle" fill={cyan} fontSize="9" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">Produces → TTFT (Time to First Token)</text>
-
-      {/* Arrow */}
-      <path d="M 386 140 L 402 140" stroke={border} strokeWidth="2" markerEnd="url(#marr)" />
+    <svg viewBox="0 0 780 580" style={{ width: '100%', maxWidth: 780, display: 'block' }}>
       <defs>
-        <marker id="marr" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
-          <path d="M0,0 L7,3.5 L0,7 Z" fill="#334155" />
+        <marker id="tarr" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 Z" fill="#475569" />
+        </marker>
+        <marker id="tarr-c" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 Z" fill="#06b6d4" />
+        </marker>
+        <marker id="tarr-p" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 Z" fill="#8b5cf6" />
+        </marker>
+        <marker id="tarr-g" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 Z" fill="#10b981" />
         </marker>
       </defs>
+      <rect width="780" height="580" fill={bg} rx="12" />
 
-      {/* Decode box */}
-      <rect x="408" y="40" width="352" height="200" rx="10" fill={`${purple}0f`} stroke={purple} strokeWidth="1.5" />
-      <text x="584" y="62" textAnchor="middle" fill={purple} fontSize="11" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">DECODE PHASE</text>
-      <text x="584" y="78" textAnchor="middle" fill={muted} fontSize="8.5" fontFamily="Plus Jakarta Sans,sans-serif">Memory-bandwidth-bound · autoregressive</text>
+      {/* ── PANEL A: Transformer Layer ── */}
+      <text x="16" y="22" fill={cyan} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif" letterSpacing="1">A  TRANSFORMER LAYER STRUCTURE</text>
 
-      {['Load last token', 'Compute Q for this 1 token only', 'Load K, V for all prior tokens (cache)', 'Compute [1 × seq_len] attention', 'Sample next token', 'Append new token K,V to cache', '→ Repeat until EOS'].map((t, i) => (
-        <g key={i}>
-          <circle cx="428" cy={96 + i * 20} r="4" fill={i === 6 ? amber : purple} opacity="0.8" />
-          <text x="440" y={100 + i * 20} fill={i === 6 ? amber : text} fontSize="9" fontFamily="Plus Jakarta Sans,sans-serif">{t}</text>
+      {/* Input token stream */}
+      {['t₁','t₂','t₃','…','tₙ'].map((t, i) => (
+        <g key={t}>
+          <rect x={36 + i * 46} y="34" width="36" height="22" rx="5" fill={`${cyan}22`} stroke={cyan} strokeWidth="1" />
+          <text x={54 + i * 46} y="49" textAnchor="middle" fill={cyan} fontSize="9" fontFamily="Plus Jakarta Sans,sans-serif">{t}</text>
         </g>
       ))}
-      <text x="584" y="242" textAnchor="middle" fill={purple} fontSize="9" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">Produces → TPS (Tokens Per Second)</text>
+      <text x="290" y="45" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">Input tokens (embeddings + positional)</text>
 
-      {/* Optimizations */}
-      <rect x="20" y="255" width="360" height="40" rx="6" fill={card} stroke={border} />
-      <text x="200" y="271" textAnchor="middle" fill={cyan} fontSize="8.5" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">Prefill optimizations</text>
-      <text x="200" y="285" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">FlashAttention · Prompt prefix cache · Shorter prompts</text>
+      {/* Down arrows to LayerNorm 1 */}
+      {[54, 100, 146, 192, 238].map(x => (
+        <path key={x} d={`M${x} 56 L${x} 68`} stroke={border} strokeWidth="1" markerEnd="url(#tarr)" />
+      ))}
 
-      <rect x="408" y="255" width="352" height="40" rx="6" fill={card} stroke={border} />
-      <text x="584" y="271" textAnchor="middle" fill={purple} fontSize="8.5" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">Decode optimizations</text>
-      <text x="584" y="285" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">GQA · Speculative decoding · PagedAttention · Continuous batching</text>
+      {/* LayerNorm 1 */}
+      <rect x="20" y="68" width="270" height="20" rx="5" fill={`${amber}22`} stroke={amber} strokeWidth="1" />
+      <text x="155" y="82" textAnchor="middle" fill={amber} fontSize="9" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">Layer Norm</text>
 
-      <text x="390" y="310" textAnchor="middle" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">Q = never cached (current token only) · K, V = cached (stable for prior tokens)</text>
+      {/* Down to MHA */}
+      <path d="M155 88 L155 100" stroke={border} strokeWidth="1" markerEnd="url(#tarr)" />
+
+      {/* Multi-Head Attention */}
+      <rect x="20" y="100" width="270" height="50" rx="5" fill={`${cyan}18`} stroke={cyan} strokeWidth="1.5" />
+      <text x="155" y="120" textAnchor="middle" fill={cyan} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">Multi-Head Attention</text>
+      <text x="60" y="138" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">Q</text>
+      <text x="145" y="138" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">K</text>
+      <text x="230" y="138" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">V</text>
+      {[62, 147, 232].map((x, i) => (
+        <g key={i}>
+          <rect x={x - 12} y="141" width="24" height="14" rx="3" fill={`${[cyan,green,pink][i]}30`} stroke={[cyan,green,pink][i]} strokeWidth="1" />
+          <text x={x} y="152" textAnchor="middle" fill={[cyan,green,pink][i]} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">{['Q','K','V'][i]}</text>
+        </g>
+      ))}
+
+      {/* Residual + down */}
+      <path d="M155 155 L155 168" stroke={border} strokeWidth="1" markerEnd="url(#tarr)" />
+      <text x="162" y="165" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">+ residual</text>
+
+      {/* LayerNorm 2 */}
+      <rect x="20" y="168" width="270" height="20" rx="5" fill={`${amber}22`} stroke={amber} strokeWidth="1" />
+      <text x="155" y="182" textAnchor="middle" fill={amber} fontSize="9" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">Layer Norm</text>
+
+      <path d="M155 188 L155 200" stroke={border} strokeWidth="1" markerEnd="url(#tarr)" />
+
+      {/* FFN / MLP */}
+      <rect x="20" y="200" width="270" height="32" rx="5" fill={`${purple}18`} stroke={purple} strokeWidth="1.5" />
+      <text x="155" y="216" textAnchor="middle" fill={purple} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">Feed-Forward / MLP</text>
+      <text x="155" y="228" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">W₂ · GELU(W₁ · x)  — 4× wider than d_model</text>
+
+      <path d="M155 232 L155 244" stroke={border} strokeWidth="1" markerEnd="url(#tarr)" />
+      <text x="162" y="242" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">+ residual</text>
+
+      <rect x="20" y="244" width="270" height="20" rx="5" fill={`${green}22`} stroke={green} strokeWidth="1" />
+      <text x="155" y="258" textAnchor="middle" fill={green} fontSize="9" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">Output (richer token representations)</text>
+
+      <text x="155" y="278" textAnchor="middle" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">× 24–96 identical layers stacked</text>
+
+      {/* ── PANEL B: Q/K/V Attention ── */}
+      <text x="330" y="22" fill={pink} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif" letterSpacing="1">B  ATTENTION: Q · K → SCORES → WEIGHT V</text>
+
+      {/* Token row */}
+      {['the','cat','sat','on'].map((t, i) => (
+        <g key={t}>
+          <rect x={330 + i * 110} y="34" width="90" height="22" rx="5" fill={`${muted}18`} stroke={border} strokeWidth="1" />
+          <text x={375 + i * 110} y="49" textAnchor="middle" fill={text} fontSize="9" fontFamily="Plus Jakarta Sans,sans-serif">{t}</text>
+        </g>
+      ))}
+
+      {/* Current query token highlight */}
+      <rect x="770" y="34" width="0" height="0" />
+      <text x="545" y="70" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">Query token: "sat" is asking "what am I related to?"</text>
+
+      {/* Attention score heatmap */}
+      {['the','cat','sat','on'].map((tok, i) => {
+        const scores = [0.05, 0.65, 1.0, 0.3];
+        const score = scores[i];
+        const opacity = 0.15 + score * 0.7;
+        return (
+          <g key={tok}>
+            <rect x={330 + i * 110} y="78" width="90" height="36" rx="5" fill={cyan} opacity={opacity} />
+            <text x={375 + i * 110} y="94" textAnchor="middle" fill={text} fontSize="9" fontFamily="Plus Jakarta Sans,sans-serif">{tok}</text>
+            <text x={375 + i * 110} y="107" textAnchor="middle" fill={cyan} fontSize="9" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">{score.toFixed(2)}</text>
+          </g>
+        );
+      })}
+      <text x="545" y="130" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">Attention scores: softmax(Q·Kᵀ / √d_k)</text>
+
+      {/* V weighted sum arrow */}
+      <path d="M545 134 L545 148" stroke={cyan} strokeWidth="1.5" markerEnd="url(#tarr-c)" />
+
+      <rect x="380" y="148" width="330" height="28" rx="6" fill={`${green}20`} stroke={green} strokeWidth="1.5" />
+      <text x="545" y="162" textAnchor="middle" fill={green} fontSize="9" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">output = Σ score(i) × V(i)  — weighted mix of Values</text>
+      <text x="545" y="174" textAnchor="middle" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">"sat" now carries context from "the" (5%), "cat" (65%), itself (100%), "on" (30%)</text>
+
+      <text x="545" y="195" textAnchor="middle" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">🔑 K and V cached after first compute  ·  Q computed fresh for every new token</text>
+
+      {/* ── PANEL C: KV Cache growth ── */}
+      <text x="16" y="302" fill={amber} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif" letterSpacing="1">C  KV CACHE GROWTH DURING DECODE</text>
+
+      {/* Step labels */}
+      {['Prefill\n(prompt)', 'Decode\nstep 1', 'Decode\nstep 2', 'Decode\nstep 3'].map((label, si) => {
+        const x = 16 + si * 190;
+        const toks = [
+          ['You','are','helpful'],
+          ['You','are','helpful','The'],
+          ['You','are','helpful','The','answer'],
+          ['You','are','helpful','The','answer','is'],
+        ][si];
+        return (
+          <g key={si}>
+            <text x={x + 80} y="320" textAnchor="middle" fill={si === 0 ? cyan : amber} fontSize="8.5" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">{label.split('\n')[0]}</text>
+            <text x={x + 80} y="330" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">{label.split('\n')[1]}</text>
+            {toks.map((tok, ti) => (
+              <g key={ti}>
+                <rect x={x + ti * 28} y="336" width="26" height="18" rx="3"
+                  fill={ti >= 3 ? `${amber}30` : `${cyan}20`}
+                  stroke={ti >= 3 ? amber : cyan} strokeWidth={ti >= 3 ? 1.5 : 1} />
+                <text x={x + ti * 28 + 13} y="349" textAnchor="middle" fill={ti >= 3 ? amber : muted} fontSize="6.5" fontFamily="Plus Jakarta Sans,sans-serif">{tok}</text>
+              </g>
+            ))}
+            <text x={x + 80} y="370" textAnchor="middle" fill={muted} fontSize="7.5" fontFamily="Plus Jakarta Sans,sans-serif">KV cache: {toks.length} entries</text>
+            {si < 3 && <path d={`M${x + 170} 350 L${x + 180} 350`} stroke={border} strokeWidth="1.5" markerEnd="url(#tarr)" />}
+          </g>
+        );
+      })}
+      <text x="390" y="390" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">Each decode step loads ALL cached K,V from GPU memory → memory-bandwidth-bound</text>
+
+      {/* ── PANEL D: Prefill vs Decode comparison ── */}
+      <text x="16" y="412" fill={green} fontSize="10" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif" letterSpacing="1">D  PREFILL vs DECODE — BOTTLENECKS &amp; METRICS</text>
+
+      {/* Prefill col */}
+      <rect x="16" y="422" width="370" height="140" rx="8" fill={`${cyan}0e`} stroke={cyan} strokeWidth="1.5" />
+      <text x="201" y="440" textAnchor="middle" fill={cyan} fontSize="11" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">PREFILL</text>
+      {[
+        ['Processing', 'All N tokens in ONE parallel pass'],
+        ['Attention', '[N × N] causal matrix'],
+        ['Bottleneck', 'Compute-bound (GPU FLOPs)'],
+        ['Output', 'First token · KV cache populated'],
+        ['Metric', 'TTFT — Time To First Token'],
+        ['Optimize with', 'FlashAttention · Prompt prefix cache'],
+      ].map(([k, v], i) => (
+        <g key={k}>
+          <text x="32" y={457 + i * 17} fill={cyan} fontSize="8.5" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">{k}</text>
+          <text x="130" y={457 + i * 17} fill={text} fontSize="8.5" fontFamily="Plus Jakarta Sans,sans-serif">{v}</text>
+        </g>
+      ))}
+
+      {/* Arrow */}
+      <path d="M392 492 L398 492" stroke={border} strokeWidth="2" markerEnd="url(#tarr)" />
+
+      {/* Decode col */}
+      <rect x="404" y="422" width="370" height="140" rx="8" fill={`${purple}0e`} stroke={purple} strokeWidth="1.5" />
+      <text x="589" y="440" textAnchor="middle" fill={purple} fontSize="11" fontWeight="700" fontFamily="Plus Jakarta Sans,sans-serif">DECODE</text>
+      {[
+        ['Processing', 'ONE token per step (autoregressive)'],
+        ['Attention', '[1 × seq_len] vector per step'],
+        ['Bottleneck', 'Memory-bandwidth (loading KV cache)'],
+        ['Output', 'One new token per iteration'],
+        ['Metric', 'TPS — Tokens Per Second'],
+        ['Optimize with', 'GQA · Speculative decoding · PagedAttention'],
+      ].map(([k, v], i) => (
+        <g key={k}>
+          <text x="420" y={457 + i * 17} fill={purple} fontSize="8.5" fontWeight="600" fontFamily="Plus Jakarta Sans,sans-serif">{k}</text>
+          <text x="520" y={457 + i * 17} fill={text} fontSize="8.5" fontFamily="Plus Jakarta Sans,sans-serif">{v}</text>
+        </g>
+      ))}
+
+      <text x="390" y="572" textAnchor="middle" fill={muted} fontSize="8" fontFamily="Plus Jakarta Sans,sans-serif">O(n²) prefill cost · O(n) decode cost with KV cache vs O(n²) without</text>
     </svg>
   );
 }

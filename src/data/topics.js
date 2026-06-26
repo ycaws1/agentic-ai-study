@@ -2660,78 +2660,138 @@ Real-time / time-sensitive → skip semantic cache entirely; prompt cache OK if 
         title: "From Text to Tokens — The Input Pipeline",
         content: `Before any computation happens, text must be converted into a numerical form the model can process. This pipeline is deterministic and happens before the transformer sees anything.
 
+\`\`\`
+"The cat sat"  ──tokenize──▶  ["The", " cat", " sat"]
+                                   │         │         │
+                              token_id=464  token_id=3797  token_id=3332
+                                   │         │         │
+                            ──embed──▶  [0.12, -0.45, 0.78, ...]  (d_model floats each)
+                                   │         │         │
+                         ──pos encode──▶  add position info (RoPE rotates Q,K vectors)
+                                   │         │         │
+                            ────────────────────────────────▶  to transformer layers
+\`\`\`
+
 **Step 1: Tokenization**
 Text is split into tokens — sub-word units. Modern LLMs use Byte Pair Encoding (BPE) or SentencePiece.
 - "Agentic" → ["Ag", "ent", "ic"] (3 tokens)
 - "AI" → ["AI"] (1 token)
 - "hello world" → ["hello", " world"] (2 tokens)
 - Common English words: ~1 token. Rare words, code, non-English: 2-4+ tokens.
-- Rule of thumb: 1 token ≈ 0.75 English words ≈ 4 characters
+- Rule of thumb: **1 token ≈ 0.75 English words ≈ 4 characters**
 
 **Step 2: Token Embedding**
-Each token ID (integer) is converted to a dense vector via a learned embedding matrix.
-- Vocabulary size: 32K-200K tokens
-- Embedding dimension (d_model): 4,096 (7B model), 8,192 (70B model), 12,288 (GPT-4 class)
-- Result: each token is now a float vector of size d_model
+Each token ID (integer) → dense float vector via a learned embedding matrix (the vocabulary lookup table).
+- Vocabulary size: 32K–200K tokens
+- Embedding dimension (d_model): 4,096 (7B model) · 8,192 (70B model) · 12,288 (GPT-4 class)
+- Semantically similar tokens end up close together in this vector space
 
 **Step 3: Positional Encoding**
-Transformers have no built-in notion of order — the same token in position 1 and position 100 look identical after embedding. Positional encodings add position information.
-- **Absolute**: sinusoidal functions (original "Attention is All You Need" paper)
-- **RoPE (Rotary Position Embedding)**: current standard (LLaMA, Gemini, GPT-4). Encodes relative position via rotation of Q and K vectors. Better generalization to longer sequences than training.
-- **ALiBi**: adds a bias penalty to attention scores based on distance. Simple but fixed context length.
+Transformers have no built-in notion of order — the same token at position 1 and position 100 look identical after embedding. Positional encodings inject position information.
 
-After embedding + positional encoding, each token is a d_model-dimensional vector that knows its identity and position. This is the input to the transformer layers.`,
+| Method | How | Used by | Tradeoff |
+|---|---|---|---|
+| Sinusoidal (absolute) | Fixed sin/cos functions per position | Original paper | Fixed max length |
+| RoPE | Rotates Q,K vectors by position angle | LLaMA, Gemini, GPT-4 | Great length generalisation |
+| ALiBi | Bias penalty on attention by distance | MPT, Falcon | Simple, fixed context |
+
+After embedding + positional encoding each token is a d_model vector that knows **both its identity and its position**. This is the input to the stacked transformer layers.`,
       },
       {
         title: "The Transformer Layer — Attention + MLP",
-        content: `A transformer model is a stack of identical layers (24-96+ layers in modern LLMs). Each layer has two components: **Multi-Head Attention (MHA)** and a **Feed-Forward / MLP block**.
+        content: `A transformer model is a stack of identical layers (24–96+ in modern LLMs). Each layer has two components: **Multi-Head Attention (MHA)** and a **Feed-Forward / MLP block**, connected by residual streams and layer norms.
 
-**Multi-Head Attention**
-The core mechanism. Each token "looks at" all other tokens and updates its representation based on what's relevant.
+\`\`\`
+    token vectors in (residual stream)
+           │
+    ┌──────▼──────┐
+    │  Layer Norm  │
+    └──────┬──────┘
+           │
+    ┌──────▼────────────────────┐
+    │   Multi-Head Attention     │  "Who should I pay attention to?"
+    │                           │
+    │   Q ──┐                   │  Q: "What am I looking for?"
+    │   K ──┼──▶ scores ──▶ V  │  K: "What do I offer?"
+    │   V ──┘    (softmax)      │  V: "What info do I carry?"
+    └──────┬────────────────────┘
+           │
+     + residual (skip connection)
+           │
+    ┌──────▼──────┐
+    │  Layer Norm  │
+    └──────┬──────┘
+           │
+    ┌──────▼────────────────────┐
+    │  Feed-Forward / MLP        │  "Transform that information"
+    │  W₂ · GELU(W₁ · x)       │  4× wider than d_model
+    │  Knowledge stored here    │  (attention routes, MLP transforms)
+    └──────┬────────────────────┘
+           │
+     + residual (skip connection)
+           │
+    token vectors out (richer representations)
+    
+    ── repeated × 24–96 layers ──
+\`\`\`
 
+**Multi-Head Attention — The Core**
 For each token, three learned projections are computed:
-- **Query (Q)**: "What am I looking for?"
-- **Key (K)**: "What do I offer as information?"
-- **Value (V)**: "What information do I carry?"
+- **Query (Q)**: "What am I looking for?" — computed only for the current position
+- **Key (K)**: "What information do I offer?" — cached after first compute
+- **Value (V)**: "What information do I carry?" — cached after first compute
 
-Attention score for token i attending to token j:
 \`\`\`
-score(i,j) = softmax( Q_i · K_j / sqrt(d_k) )
-output_i   = Σ score(i,j) × V_j
+attention score(i attending to j) = softmax( Q_i · K_j / sqrt(d_k) )
+output_i = Σ  score(i,j) × V_j
 \`\`\`
 
-**Causal masking**: during training (and prefill), token i can only attend to tokens 0..i (not future tokens). Implemented by setting future positions to -∞ before softmax.
+The division by √d_k prevents dot products from growing too large in high-dimensional spaces, which would push softmax into near-zero gradient regions.
 
-**Multi-head**: this attention is computed H times in parallel (e.g., H=32 heads), each with different Q/K/V projection weights. Each head learns different relationship patterns (syntax, semantics, coreference...). Outputs are concatenated and projected.
+**Causal masking**: token i can only attend to tokens 0..i. Future positions are set to −∞ before softmax → they get 0 weight. This is what makes autoregressive generation possible.
 
-**Why Q is never cached**: Q is the "what am I looking for?" for the current token. It changes for every new token. K and V are stable for already-processed tokens, so they are cached.
+**Multi-head**: run H attention operations in parallel (e.g., H=32), each with different Q/K/V weight matrices. Each head specialises in different relationship types (syntax, coreference, semantics...). Outputs are concatenated → projected back to d_model.
 
 **Feed-Forward / MLP Block**
-After attention, each token passes through a position-wise MLP independently:
-\`\`\`
-FFN(x) = W_2 · GELU(W_1 · x)
-\`\`\`
-The MLP dimension is typically 4× d_model (e.g., 16,384 for a 4,096 d_model model). This is where most of the model's "knowledge" is stored — the attention layer routes information, the MLP transforms it.
+Position-wise: each token processed independently. Dimension is 4× d_model (e.g., 16,384 for d_model=4,096). This is where the model's factual knowledge is primarily stored — attention routes information between tokens, MLP transforms and applies knowledge.
 
-Each layer also has:
-- **Layer normalization** (Pre-LN in modern models): stabilizes training
-- **Residual connections**: x_out = x_in + layer(x_in). Allows gradients to flow directly, enables very deep networks`,
+**Residual connections** (x_out = x_in + layer(x)): allow gradients to flow directly through deep networks. Critical for training stability with 96+ layers.`,
       },
       {
         title: "The Prefill Phase — Parallel Processing",
         content: `**Prefill** is the first phase of inference. The model processes the entire input prompt in a single parallel forward pass.
 
 \`\`\`
-Input: "You are a helpful assistant. The user asks: what is RAG?"
-        [token_1, token_2, ..., token_N]  ← all processed at once
+Prompt: "You are a helpful assistant. What is RAG?"
+         [tok₁] [tok₂] [tok₃]  ...  [tokₙ]
+           │      │      │             │
+           └──────┴──────┴─────────────┘   ← ALL processed simultaneously (parallel)
+                         │
+              ┌──────────▼──────────┐
+              │  Transformer Layer 1 │  Compute Q,K,V for all N tokens
+              │  [N×N] attention     │  Store K,V → KV cache
+              │  MLP for all N      │
+              └──────────┬──────────┘
+                         │  ×24-96 layers
+              ┌──────────▼──────────┐
+              │  Final layer         │
+              │  Softmax over vocab  │
+              └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │  First output token  │  ← TTFT ends here
+              │  KV cache: N entries │  (one entry per prompt token, per layer)
+              └─────────────────────┘
+\`\`\`
 
-For each transformer layer:
-  → Compute Q, K, V for ALL N tokens simultaneously (parallel)
-  → Compute full [N × N] causal attention matrix
-  → Store K and V in the KV cache
-  → Pass through MLP for all N tokens in parallel
-
-Output: hidden state for each token, KV cache fully populated
+**Attention during prefill — the N×N matrix**:
+\`\`\`
+         tok₁  tok₂  tok₃  tok₄
+  tok₁ [  ✓     ✗     ✗     ✗  ]   token 1 can only see itself
+  tok₂ [  ✓     ✓     ✗     ✗  ]   token 2 can see tokens 1-2
+  tok₃ [  ✓     ✓     ✓     ✗  ]   token 3 can see tokens 1-3
+  tok₄ [  ✓     ✓     ✓     ✓  ]   token 4 can see all
+         (causal mask — ✗ = set to -∞, excluded from softmax)
 \`\`\`
 
 **Key characteristics**:
@@ -2755,6 +2815,19 @@ The [N × N] attention matrix for 100K tokens = 10 billion elements. This doesn'
       {
         title: "The Decode Phase — Autoregressive Generation",
         content: `**Decode** is the second phase. After prefill, the model generates output tokens one at a time. Each generated token becomes input for the next step.
+
+\`\`\`
+KV Cache grows with each new token:
+
+After prefill:  [You][are][helpful]           KV cache: 3 entries
+                                    ▼ generate
+Step 1:         [You][are][helpful][The]       KV cache: 4 entries
+                                         ▼ generate
+Step 2:         [You][are][helpful][The][answer]    KV cache: 5 entries
+
+Each step: load ALL cached K,V from GPU HBM memory → compute [1×N] attention → sample token
+           └───────────────────── memory-bandwidth bottleneck ──────────────────────────────┘
+\`\`\`
 
 \`\`\`
 After prefill: KV cache populated, first output token predicted
