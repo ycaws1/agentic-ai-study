@@ -117,32 +117,6 @@ export default function App() {
 }
 
 function HeroBanner() {
-  const topics = [
-    { label: 'Enterprise Architecture', color: '#06b6d4' },
-    { label: 'Multi-Agent Systems', color: '#a78bfa' },
-    { label: 'ReAct Pattern', color: '#f59e0b' },
-    { label: 'Harness Engineering', color: '#10b981' },
-    { label: 'Evals', color: '#ef4444' },
-    { label: 'Loop Engineering', color: '#f97316' },
-    { label: 'MCP', color: '#8b5cf6' },
-    { label: 'Agent Skills', color: '#ec4899' },
-    { label: 'A2A Protocol', color: '#22d3ee' },
-    { label: 'Memory & State', color: '#34d399' },
-    { label: 'Observability', color: '#0ea5e9' },
-    { label: 'RAG', color: '#fb7185' },
-    { label: 'Guardrails', color: '#f43f5e' },
-    { label: 'Deep Agents', color: '#7c3aed' },
-    { label: 'LLM Caching', color: '#f59e0b' },
-    { label: 'Transformers & LLMs', color: '#8b5cf6' },
-    { label: 'Hybrid Search & Reranking', color: '#0ea5e9' },
-    { label: 'Fine-tuning vs RAG vs Prompting', color: '#10b981' },
-    { label: 'Vector Databases', color: '#06b6d4' },
-    { label: 'Context Engineering', color: '#a78bfa' },
-    { label: 'Prompt Engineering', color: '#f59e0b' },
-    { label: 'AI Safety & Alignment', color: '#ef4444' },
-    { label: 'Enterprise AI Security', color: '#dc2626' },
-  ];
-
   return (
     <div style={{
       background: 'linear-gradient(180deg, rgba(6,182,212,0.04) 0%, transparent 100%)',
@@ -178,24 +152,7 @@ function HeroBanner() {
               Study topics, quiz yourself with flashcards, and review Q&A.
             </p>
           </div>
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            maxWidth: 320,
-            alignContent: 'flex-start',
-          }}>
-            {topics.map(t => (
-              <span key={t.label} style={{
-                padding: '4px 10px',
-                background: `${t.color}12`,
-                border: `1px solid ${t.color}30`,
-                borderRadius: 20,
-                fontSize: '0.7em',
-                color: t.color,
-                fontWeight: 600,
-              }}>{t.label}</span>
-            ))}
+          <div style={{ display: 'none' }}>{/* topic pills removed */}
           </div>
         </div>
       </div>
