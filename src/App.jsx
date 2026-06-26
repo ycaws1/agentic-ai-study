@@ -110,7 +110,7 @@ export default function App() {
         color: 'var(--text-dim)',
         fontFamily: 'var(--font-body)',
       }}>
-        Agentic AI Interview Prep · Enterprise Architecture · Multi-Agent · ReAct · MCP · Evals
+        Agentic AI Interview Prep · Enterprise Architecture · Multi-Agent · RAG · Fine-tuning · Context Engineering · AI Safety
       </footer>
     </div>
   );
@@ -135,6 +135,12 @@ function HeroBanner() {
     { label: 'LLM Caching', color: '#f59e0b' },
     { label: 'Transformers & LLMs', color: '#8b5cf6' },
     { label: 'Hybrid Search & Reranking', color: '#0ea5e9' },
+    { label: 'Fine-tuning vs RAG vs Prompting', color: '#10b981' },
+    { label: 'Vector Databases', color: '#06b6d4' },
+    { label: 'Context Engineering', color: '#a78bfa' },
+    { label: 'Prompt Engineering', color: '#f59e0b' },
+    { label: 'AI Safety & Alignment', color: '#ef4444' },
+    { label: 'Enterprise AI Security', color: '#dc2626' },
   ];
 
   return (

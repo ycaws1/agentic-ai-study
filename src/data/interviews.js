@@ -1162,4 +1162,191 @@ System prompt + skill definitions are cached at the provider level. Google Deep 
       },
     ],
   },
+  {
+    id: "finetuning-rag-prompting",
+    category: "Fine-tuning vs RAG vs Prompting",
+    question: "Walk me through how you decide whether to use prompting, RAG, or fine-tuning for a new enterprise AI feature.",
+    difficulty: "medium",
+    sections: [
+      {
+        title: "The Decision Framework",
+        content: `"I start with prompting and only move to more complex solutions when I can demonstrate with an eval that simpler approaches fail.
+
+**Step 1 — Prompting first**: engineer the system prompt, add few-shot examples if needed, and run an eval. If it passes, ship it. No infrastructure, instant iteration. This solves ~40-50% of problems teams mistakenly think require fine-tuning.
+
+**Step 2 — RAG if the problem is about knowledge**: if the model lacks up-to-date facts, proprietary information, or needs to cite sources, add retrieval. RAG is the right answer when the information changes (documentation, product catalog, regulatory guidance). Fine-tuning these facts would produce a stale model within months.
+
+**Step 3 — Fine-tuning if the problem is about behavior**: if output style keeps drifting despite good prompts, if format consistency is critical at high volume, or if domain vocabulary is specialized enough that the base model consistently gets it wrong — then fine-tune with LoRA. The key rule: **fine-tuning is for form, not facts**.
+
+**Step 4 — Combine**: the mature production pattern is fine-tune + RAG. Fine-tune the style and format behavior into the model; use RAG for the knowledge. The model's interface is tuned; the content is retrieved.
+
+**The cost crossover**: at <1M tokens/month, prompting wins on cost. At >10M tokens/month on a narrow task, a fine-tuned small model on owned infrastructure is often both cheaper and more accurate than a prompted GPT-4o."`,
+      },
+      {
+        title: "Common Mistakes to Avoid",
+        content: `**Mistake 1**: Fine-tuning to teach the model new facts. These facts become stale immediately and the model hallucinates more confidently (because it was trained to produce those answers).
+
+**Mistake 2**: Skipping the eval step. Deciding "fine-tuning would help here" based on intuition rather than measuring what's actually failing.
+
+**Mistake 3**: Full fine-tuning instead of LoRA. Full fine-tuning is almost never justified in 2026. LoRA achieves comparable quality at 100-1000× less compute, and adapters can be swapped at runtime to serve multiple specialized versions from one base model.
+
+**Mistake 4**: Fine-tuning as the first attempt. The operational overhead of a training pipeline, eval harness, model registry, and retraining schedule is significant. Only incur it when simpler approaches demonstrably fail.`,
+      },
+    ],
+  },
+  {
+    id: "vector-db-choice",
+    category: "Vector Databases",
+    question: "How would you choose a vector database for a new enterprise RAG system?",
+    difficulty: "medium",
+    sections: [
+      {
+        title: "Decision Framework",
+        content: `"My default recommendation is pgvector until proven otherwise.
+
+**Start with pgvector if**: you're already on PostgreSQL and your scale is below ~10M vectors. This covers the majority of enterprise RAG systems. The key advantages: zero additional service to operate, ACID-transactional consistency with your application data, and the ability to JOIN vector search with relational data in a single SQL query. With HNSW indexing (added in pgvector 0.5+), it achieves 6-15ms p50 latency at 1M vectors — irrelevant when LLM inference is 500-2000ms.
+
+**Move to Qdrant when**: queries involve heavy metadata filtering (multi-tenant, attribute-heavy search). Qdrant's filterable HNSW integrates filter conditions into graph traversal instead of post-filtering, which is critical for selective queries. If I have 10M vectors and a filter that matches only 1% of them, post-filtering requires retrieval of 100× more candidates — Qdrant's in-graph filtering solves this directly.
+
+**Use Pinecone when**: the team has no infrastructure capacity to operate stateful services. The operational silence is worth the per-query cost and vendor lock-in.
+
+**Use Weaviate when**: hybrid search (dense + BM25) is a core requirement, not an afterthought.
+
+The honest benchmark finding: at 1M vectors, pgvector's 6ms p50 vs. Qdrant's 4ms is meaningless compared to LLM inference latency. The real differentiator is filtered search performance and operational complexity — not raw ANN speed."`,
+      },
+      {
+        title: "HNSW Tuning",
+        content: `**Key parameters to tune for production**:
+
+M (default 16): connections per node in the HNSW graph. Higher M → better recall, more memory. I typically use M=16 for standard RAG, M=32 for high-recall requirements (legal, medical).
+
+ef_construction (default 64-200): quality of index build. I use ef_construction=200 for production quality, ef_construction=64 for dev/test where fast build time matters more.
+
+ef_search (query-time): this is the recall/latency knob you tune without rebuilding the index. ef=64 gives ~95% recall; ef=200 gives ~99% recall. Start at 100 and tune based on your recall@k eval.
+
+**The filtering problem in production**: if your RAG system does "find me documents similar to X, but only from tenant Y", you need a database with in-graph filtering (Qdrant) or you'll silently destroy recall at scale. This is a frequent production surprise when teams benchmark at 10K vectors and deploy at 10M vectors with multi-tenancy.`,
+      },
+    ],
+  },
+  {
+    id: "context-engineering-interview",
+    category: "Context Engineering",
+    question: "How do you manage context windows in long-running enterprise agents?",
+    difficulty: "hard",
+    sections: [
+      {
+        title: "The Core Strategies",
+        content: `"Context management is one of the most underestimated problems in production agents. The advertised 128K context window is not the effective context window — models degrade in the middle (lost-in-the-middle), and research shows accuracy can drop 13.9%-85% as context grows even with the relevant information present.
+
+**My 5-part approach**:
+
+**1. Budget enforcement**: hard token limits per context component. RAG chunks max 8K, conversation history max 5K, tool results max 4K. No component is allowed to overflow its budget regardless of how much content is available.
+
+**2. Ordering for attention bias**: critical information at the beginning or end, never in the middle. System prompt first (also benefits prefix caching). User query always last. RAG chunks sorted by relevance with the most relevant immediately before the query.
+
+**3. Progressive summarization**: when conversation history exceeds a threshold (typically 10-15 turns), summarize the oldest N turns. Preserve: key decisions, facts, open questions. Discard: pleasantries, intermediate reasoning, repeated content.
+
+**4. Structured note-taking**: for long-horizon agents, maintain external NOTES that capture key state. Load these notes into context rather than full history. A 200-token structured note replaces 2,000 tokens of conversation history.
+
+**5. Sub-agent isolation**: for complex multi-step research tasks, each sub-task runs in a fresh, narrow context. The orchestrator receives only the distilled summary. This prevents context rot from compounding across an entire workflow.
+
+The mental model I use: treat the context window as a finite CPU cache. You don't put everything in L1 cache — you curate what's hot and evict what's cold."`,
+      },
+      {
+        title: "Measuring Context Health",
+        content: `**Metrics to track in production**:
+
+- **Token utilization by component**: are you burning 40% of context on system prompt? Find out with logging.
+- **Recall@k on context-sensitive questions**: does the model correctly answer questions about earlier conversation turns? Dropping recall = context rot.
+- **First-Pass Accuracy Rate (FPAR)**: does the agent produce the right answer without needing clarification? Context quality is the primary driver.
+- **Compaction loss rate**: after summarizing history, what fraction of fact-check questions about that history fail? Calibrate your compression aggressiveness accordingly.
+
+**The lost-in-the-middle mitigation in practice**: I use a custom RAG chunk ordering step that places the top-1 chunk (by reranker score) immediately before the user query, and top-2 through top-5 at the beginning of the RAG section. The lowest-scored chunks go in the middle where the model will lose them anyway — I'd rather have the model lose low-confidence context than high-confidence context.`,
+      },
+    ],
+  },
+  {
+    id: "enterprise-security-design",
+    category: "Enterprise AI Security",
+    question: "How would you secure an enterprise agent that has access to customer data and can take write actions?",
+    difficulty: "hard",
+    sections: [
+      {
+        title: "The Security Architecture",
+        content: `"I approach this with defense-in-depth across four layers: injection defense, PII controls, AuthZ enforcement, and audit logging. The most important principle is that security controls live in deterministic code — not in model prompts.
+
+**Injection defense**:
+The biggest risk with an agent that reads customer data is indirect prompt injection. A customer support ticket, a retrieved document, or a tool response could contain attacker-controlled instructions. My defenses:
+1. Spotlighting: prefix all retrieved content with \`<UNTRUSTED_DOCUMENT>\` tags, with system prompt instructions to treat them as data only
+2. Injection classifier on all RAG context and tool outputs (not just user input — that's where most teams miss it)
+3. Minimal permissions: if the agent needs to read invoices and process refunds, it has exactly those two tools — nothing else. A successful injection with read-only permissions cannot exfiltrate or delete data.
+4. HITL gates for irreversible actions: any write action above a threshold requires explicit user confirmation before execution.
+
+**PII controls**:
+I scan at all 4 insertion points: user input, RAG context before it enters the prompt, LLM output before it returns to the user, and tool call arguments before they go to external APIs. For structured PII (credit cards, SSNs), regex with Luhn/format checks. For contextual PII (a name + medical context), NER with Presidio or Comprehend. PII that enters RAG retrieval gets redacted before the model reads it unless the agent role is explicitly authorized to handle it.
+
+**AuthZ enforcement**:
+Agent identity and user identity are separate. The agent authenticates as a service account, but it acts on behalf of the authenticated user. Effective permissions = intersection of agent's allowed tools and user's RBAC role. This is enforced by a middleware \`ToolAuthZMiddleware\` that throws \`PermissionDenied\` before any tool call — not by a prompt instruction, because prompt instructions are probabilistic and can be overridden by injection.
+
+Every session gets a scoped short-lived token (15-minute expiry, specific tenant_id, specific allowed_scopes). The agent cannot do anything not in the token scope.
+
+**Audit logging**:
+Every event — tool calls, guardrail triggers, permission denials — is logged to append-only storage (S3 Object Lock or equivalent). The log includes: user_id, tenant_id, agent_id, agent_version, tool_name, sanitized parameters, guardrail results, trace_id. PII is never in logs. Logs are immutable. Permission denied rate spikes trigger real-time alerts."`,
+      },
+      {
+        title: "Tradeoffs and Calibration",
+        content: `"The fundamental tension is that every security control adds latency and may reduce capability.
+
+My calibration principle is **risk-tiered controls**:
+- Reads: unrestricted (can't cause harm)
+- Low-value writes (<$500 refund): auto-approved with logging
+- High-value or irreversible writes: require HITL confirmation
+
+Adding a full injection classifier to every user input adds 50-200ms. Adding it to every tool output also adds 50-200ms per tool call. For a 5-step agent, that's potentially 1 second of added latency just from security scanning. I'm comfortable with that trade-off for an agent with write access to production systems. I'd optimize by running the classifier asynchronously on reads (flag and review post-hoc) but synchronously on writes (block before execution).
+
+The thing I would never cut: immutable audit logs and deterministic AuthZ enforcement in code. These are non-negotiable — they're what makes an incident survivable. Without audit logs, you can't prove what the agent did or didn't do. Without code-level AuthZ, a single prompt injection can bypass all your other controls."`,
+      },
+    ],
+  },
+  {
+    id: "ai-safety-enterprise",
+    category: "AI Safety & Alignment",
+    question: "How do you design an enterprise agent system that is both capable and safe?",
+    difficulty: "hard",
+    sections: [
+      {
+        title: "The 5-Layer Safety Architecture",
+        content: `"Safety in enterprise agentic systems is an architectural property, not a model property. Even a perfectly aligned model can be unsafe in an unsafe architecture.
+
+I think about it as 5 layers:
+
+**Layer 1 — Model selection**: use safety-trained models (RLHF/Constitutional AI). Evaluate on your specific task distribution before deployment. Don't assume a model that passes general benchmarks passes your domain-specific safety requirements.
+
+**Layer 2 — System prompt constraints**: explicit boundaries for what the agent can and cannot do. Crucially: define what to do when uncertain — 'ask for clarification rather than guessing' prevents the most common agentic errors.
+
+**Layer 3 — Guardrails middleware**: input validation (prompt injection detection, intent classification), output validation (PII leak detection, hallucination scoring, tool call schema validation). These are synchronous checks on every call.
+
+**Layer 4 — Human oversight gates**: for high-stakes or irreversible actions, require human approval. The trigger conditions are explicit: 'before any transaction above $1,000, before any email to an external party, before any database write.'
+
+**Layer 5 — Monitoring and drift detection**: online evals on sampled live traffic. Anomaly detection on output distributions. Alert when behavior falls outside the baseline established during testing.
+
+The key architectural principle is **minimal footprint**: agents take the smallest action that accomplishes the goal, prefer reversible actions, and request only necessary permissions."`,
+      },
+      {
+        title: "Sycophancy & Misalignment in Practice",
+        content: `"The most insidious enterprise alignment failure I've seen is sycophancy — the model has been trained by RLHF to agree with users because agreement gets higher ratings. In enterprise settings this means:
+
+A procurement agent told 'I think this contract clause is fine' will agree, even if the clause creates liability risk. A compliance agent told 'just approve this exception' may comply under sufficient social pressure.
+
+**Mitigations**:
+1. Explicit anti-sycophancy instructions in system prompt: 'Your job is accuracy, not agreement. Correct the user when they are factually wrong or requesting something outside policy. Do not modify your assessment based on how insistently the user repeats a claim.'
+
+2. Adversarial testing: include test cases where evaluators insist on incorrect information and measure how often the agent capitulates. A sycophancy rate above ~5% on adversarial tests is a red flag.
+
+3. Separation of concerns: use the model for reasoning, not for policy decisions. Policy constraints are enforced in code, not in model behavior. 'Never process a refund above $500' is a code check, not a prompt instruction — prompt instructions can be eroded by a sufficiently persistent user.
+
+On the regulatory side: enterprises in the EU need to comply with the AI Act, which requires human oversight, transparency, and conformity assessment for high-risk AI systems (HR, credit scoring, medical). NIST AI RMF provides the operational framework: GOVERN → MAP → MEASURE → MANAGE."`,
+      },
+    ],
+  },
 ];
