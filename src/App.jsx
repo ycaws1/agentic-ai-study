@@ -101,6 +101,9 @@ export default function App() {
         {activeTab === 'interview' && <InterviewQA />}
       </main>
 
+      {/* Resources Panel */}
+      <ResourcesPanel />
+
       {/* Footer */}
       <footer style={{
         borderTop: '1px solid rgba(6,182,212,0.08)',
@@ -112,6 +115,120 @@ export default function App() {
       }}>
         Agentic AI Interview Prep · Enterprise Architecture · Multi-Agent · RAG · Fine-tuning · Context Engineering · AI Safety
       </footer>
+    </div>
+  );
+}
+
+const RESOURCES = [
+  {
+    title: "Building the 7 Layers of a Production-Grade Agentic AI System",
+    author: "Fareed Khan",
+    url: "https://freedium-mirror.cfd/https://levelup.gitconnected.com/building-the-7-layers-of-a-production-grade-agentic-ai-system-37ee5d941f1c",
+    tags: ["LangGraph", "Production", "FastAPI", "Prometheus", "Streaming"],
+    desc: "Modular codebase, data persistence, security, service layer, LangGraph agents, API gateway, observability, evals, and stress testing — end to end.",
+  },
+];
+
+function ResourcesPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{
+      borderTop: '1px solid rgba(6,182,212,0.1)',
+      background: 'rgba(6,182,212,0.02)',
+    }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 16px' }}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 0',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-muted)',
+            fontFamily: 'var(--font-display)',
+            fontSize: '0.78em',
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            cursor: 'pointer',
+          }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: 'var(--cyan)' }}>📚</span>
+            STUDY RESOURCES
+            <span style={{
+              background: 'rgba(6,182,212,0.15)',
+              border: '1px solid rgba(6,182,212,0.3)',
+              borderRadius: 10,
+              padding: '1px 7px',
+              fontSize: '0.85em',
+              color: 'var(--cyan)',
+            }}>{RESOURCES.length}</span>
+          </span>
+          <span style={{ fontSize: '0.9em', color: 'var(--cyan)' }}>{open ? '▲' : '▼'}</span>
+        </button>
+
+        {open && (
+          <div style={{ paddingBottom: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {RESOURCES.map((r, i) => (
+              <a
+                key={i}
+                href={r.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'block',
+                  padding: '14px 18px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid rgba(6,182,212,0.15)',
+                  borderRadius: 10,
+                  textDecoration: 'none',
+                  transition: 'border-color 0.15s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(6,182,212,0.4)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(6,182,212,0.15)'}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{
+                      fontFamily: 'var(--font-display)',
+                      fontWeight: 700,
+                      fontSize: '0.9em',
+                      color: 'var(--cyan)',
+                      marginBottom: 4,
+                      lineHeight: 1.4,
+                    }}>
+                      {r.title}
+                    </div>
+                    <div style={{ fontSize: '0.78em', color: 'var(--text-dim)', marginBottom: 8 }}>
+                      by {r.author}
+                    </div>
+                    <div style={{ fontSize: '0.8em', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                      {r.desc}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '1.1em', flexShrink: 0, marginTop: 2 }}>↗</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 10 }}>
+                  {r.tags.map(tag => (
+                    <span key={tag} style={{
+                      padding: '2px 8px',
+                      background: 'rgba(6,182,212,0.08)',
+                      border: '1px solid rgba(6,182,212,0.2)',
+                      borderRadius: 6,
+                      fontSize: '0.68em',
+                      color: 'var(--text-muted)',
+                      fontFamily: 'var(--font-mono)',
+                    }}>{tag}</span>
+                  ))}
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

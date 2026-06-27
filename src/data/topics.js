@@ -4654,4 +4654,659 @@ Real-time alerts for:
       },
     ],
   },
+  {
+    id: "langgraph",
+    title: "LangGraph & Stateful Agents",
+    icon: "🔀",
+    color: "#6366f1",
+    summary: "StateGraph, nodes, edges, and checkpointing — building agents that loop, branch, remember state across restarts, and recover from failures.",
+    sections: [
+      {
+        title: "Why LangGraph Exists — The Problem with Chains",
+        content: `Simple LLM chains (Input → LLM → Output) cannot model real agentic behavior. Agents need to **loop** (retry after tool failure), **branch** (route to different tools based on output), **persist state** (remember what happened across restarts), and **coordinate** (multiple sub-agents working in parallel or sequence).
+
+**LangGraph** solves this by modeling agent execution as a **directed graph** where:
+- **Nodes** = units of work (LLM call, tool call, human review)
+- **Edges** = transitions between nodes (can be conditional)
+- **State** = a typed dictionary passed between nodes and persisted to a database
+
+\`\`\`
+Standard chain (linear, stateless):
+  Input → LLM → Output
+
+LangGraph (cyclic, stateful):
+  ┌─────────────────────────────────┐
+  │     State: { messages, plan }   │
+  └─────────────────────────────────┘
+       ↓
+  [agent_node] ──── calls tool ────→ [tool_node]
+       ↑                                  │
+       └──────── continues loop ──────────┘
+       │
+       └──── output condition ───→ [END]
+\`\`\`
+
+**Key difference from LangChain chains**: LangGraph supports cycles. An agent can call a tool, get a result, reason about it, call another tool, and continue this loop until a termination condition is met — all within a single stateful execution.
+
+**Why stateful matters in production**: if the server restarts mid-execution (deployment, crash), a LangGraph agent with a PostgreSQL checkpointer resumes exactly where it stopped. No work is lost. This is critical for long-running tasks (minutes to hours).
+
+**The LangGraph mental model**:
+- Think of it as a state machine where the LLM decides which transition to take
+- State flows through nodes and edges like water through pipes
+- Each node reads the state, does work, and returns a partial state update
+- The graph framework merges updates and routes to the next node`,
+      },
+      {
+        title: "StateGraph, Nodes & Edges",
+        content: `**Building a ReAct agent with LangGraph**:
+
+\`\`\`python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List, Annotated
+import operator
+
+# 1. Define the State — typed dictionary shared across all nodes
+class AgentState(TypedDict):
+    messages: Annotated[List, operator.add]  # append-only message list
+    plan: str
+    step_count: int
+
+# 2. Define nodes — plain Python functions that take state and return updates
+def agent_node(state: AgentState):
+    """LLM decides next action"""
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+def tool_node(state: AgentState):
+    """Execute the tool the LLM called"""
+    last_message = state["messages"][-1]
+    result = execute_tool(last_message.tool_calls[0])
+    return {"messages": [ToolMessage(result)], 
+            "step_count": state["step_count"] + 1}
+
+# 3. Define routing logic — where to go next
+def should_continue(state: AgentState) -> str:
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        return "tools"  # → tool_node
+    return END          # → finish
+
+# 4. Build the graph
+graph = StateGraph(AgentState)
+graph.add_node("agent", agent_node)
+graph.add_node("tools", tool_node)
+graph.set_entry_point("agent")
+graph.add_conditional_edges("agent", should_continue)
+graph.add_edge("tools", "agent")  # after tool → back to agent
+app = graph.compile()
+\`\`\`
+
+**Key graph primitives**:
+
+\`\`\`
+add_node(name, fn)         → register a node function
+set_entry_point(name)       → where execution starts
+add_edge(A, B)              → unconditional A → B transition
+add_conditional_edges(A, fn)→ A → fn(state) decides where next
+compile()                   → lock the graph; returns runnable app
+\`\`\`
+
+**State annotations** control how updates are merged:
+- \`Annotated[List, operator.add]\` → append to list (messages)
+- Plain field → replace entirely (plan, step_count)
+
+**Subgraphs**: nested StateGraphs. An orchestrator can invoke a sub-agent graph as if it were a single node. The sub-agent runs to completion, returns its output to the parent graph's state.`,
+      },
+      {
+        title: "Checkpointing — State Persistence Across Restarts",
+        content: `**Checkpointing** is LangGraph's persistence layer. After every node execution, the full state is saved to a store. On restart, the graph resumes from the last checkpoint.
+
+**Why it matters**:
+- A 30-minute deep research task cannot afford to restart from scratch after a deployment
+- Human-in-the-loop workflows may pause for hours waiting for approval — state must persist
+- Debugging: inspect exactly what state the agent had at each step
+
+**PostgreSQL checkpointer** (production standard):
+\`\`\`python
+from langgraph.checkpoint.postgres import PostgresSaver
+import psycopg
+
+# Create checkpointer backed by PostgreSQL
+conn_string = "postgresql://user:pass@host:5432/db"
+with PostgresSaver.from_conn_string(conn_string) as checkpointer:
+    # Compile graph WITH persistence
+    app = graph.compile(checkpointer=checkpointer)
+    
+    # Every node completion saves state to PostgreSQL
+    # Keyed by thread_id — each conversation is a "thread"
+    config = {"configurable": {"thread_id": "user-123-session-456"}}
+    result = app.invoke(initial_state, config=config)
+\`\`\`
+
+**Thread model**: each unique \`thread_id\` is an independent conversation history. Resuming a thread continues exactly where it left off.
+
+**Available checkpointers**:
+| Backend | Use case |
+|---|---|
+| InMemorySaver | Development / testing only |
+| PostgresSaver | Production — durable, queryable |
+| RedisSaver | Production — fast, TTL expiry |
+| SqliteSaver | Local scripts, not multi-process |
+
+**Human-in-the-loop with interrupts**:
+\`\`\`python
+# Compile with interrupt point — graph pauses and waits
+app = graph.compile(
+    checkpointer=checkpointer,
+    interrupt_before=["human_approval_node"]  # pause BEFORE this node
+)
+
+# First invocation: runs until interrupt, saves state
+app.invoke(state, config=config)
+
+# Human reviews, makes decision
+# Second invocation: resumes from checkpoint with human input
+app.invoke({"human_decision": "approved"}, config=config)
+\`\`\`
+
+This is how enterprise HITL workflows are built — the agent pauses at a gate, a human reviews asynchronously, and the same graph execution continues.`,
+      },
+      {
+        title: "Multi-Agent Patterns in LangGraph",
+        content: `**Supervisor pattern** (orchestrator-worker):
+\`\`\`python
+# Supervisor decides which worker to invoke next
+def supervisor_node(state):
+    response = llm_with_tools.invoke([
+        SystemMessage("You are a supervisor. Decide: research, write, or FINISH"),
+        *state["messages"]
+    ])
+    return {"next_agent": response.tool_calls[0]["name"]}
+
+def route_to_agent(state):
+    return state["next_agent"]  # "research" | "write" | "FINISH"
+
+graph.add_conditional_edges("supervisor", route_to_agent, {
+    "research": "research_agent",
+    "write": "writing_agent",
+    "FINISH": END,
+})
+\`\`\`
+
+**Parallel fan-out** (map-reduce):
+\`\`\`python
+from langgraph.graph import Send
+
+def fan_out(state):
+    # Send each sub-task to a worker node in parallel
+    return [Send("worker", {"task": t}) for t in state["tasks"]]
+
+graph.add_conditional_edges("planner", fan_out)
+graph.add_edge("worker", "aggregator")  # all workers feed into aggregator
+\`\`\`
+
+**Long-term memory with mem0**:
+\`\`\`python
+from mem0 import MemoryClient
+
+memory = MemoryClient()
+
+def agent_node(state):
+    # Retrieve user-specific long-term memory
+    long_term = memory.search(
+        query=state["messages"][-1].content,
+        user_id=state["user_id"]
+    )
+    
+    # Add to context
+    system = f"What I know about you: {long_term}"
+    response = llm.invoke([SystemMessage(system)] + state["messages"])
+    
+    # Store new facts after conversation
+    memory.add(state["messages"], user_id=state["user_id"])
+    return {"messages": [response]}
+\`\`\`
+
+mem0 stores facts across sessions: "User prefers concise answers", "User is building a billing system". Unlike conversation history (short-term), these facts survive session boundaries.
+
+**Prompt-as-asset pattern** (from the article):
+Store system prompts as versioned Markdown files, not hardcoded strings. Load at runtime with dynamic variable injection. This allows prompt engineers to iterate without touching application code.`,
+      },
+      {
+        title: "Tradeoffs",
+        content: `**LangGraph vs. plain Python (hand-rolled agent loop)**:
+
+| | LangGraph | Custom loop |
+|---|---|---|
+| Persistence/checkpointing | Built-in (Postgres, Redis) | Build yourself |
+| Human-in-the-loop | Interrupt mechanism built-in | Complex to implement |
+| Visualization | LangSmith graph view | None |
+| Streaming | Native token + step streaming | Manual SSE wiring |
+| Learning curve | Moderate (graph concepts) | Low (just Python) |
+| Vendor dependency | LangChain ecosystem | None |
+| Debugging | LangSmith traces | print() / logging |
+
+**LangGraph vs. AutoGen vs. CrewAI**:
+
+| | LangGraph | AutoGen | CrewAI |
+|---|---|---|---|
+| Model | Explicit state graph | Conversation threads | Role-based crews |
+| Control flow | Code-defined edges | LLM-decided | Role-defined |
+| Persistence | First-class (checkpointers) | Limited | Limited |
+| Streaming | Native | Limited | Limited |
+| Best for | Complex stateful workflows, HITL | Research, multi-agent chat | Structured role delegation |
+| Production maturity | High | Medium | Medium |
+
+**When NOT to use LangGraph**:
+- Simple single-turn request/response → just call the API directly
+- Prompt-only solutions → LangGraph is overkill
+- Teams unfamiliar with graph concepts → custom loop may be cleaner to maintain
+
+**The checkpointing cost**: every node completion writes to the database. For a 20-step agent, that's 20 DB writes. On a fast, low-latency task, this overhead matters. For long-running tasks (>1 minute), the persistence benefit vastly outweighs the write cost.
+
+**State schema discipline**: the State TypedDict is the contract between all nodes. Adding a field requires updating every node that reads it. Poor schema design early → expensive refactors later. Design your state schema as carefully as you design your database schema.`,
+      },
+    ],
+  },
+  {
+    id: "production-engineering",
+    title: "Production Engineering for AI",
+    icon: "🚀",
+    color: "#0ea5e9",
+    summary: "Containerization, multi-environment config, CI/CD pipelines, SSE streaming, connection pooling, circuit breakers, and load testing for production agent systems.",
+    sections: [
+      {
+        title: "Project Structure & Modular Architecture",
+        content: `Production AI systems outgrow flat scripts quickly. The standard pattern is a **layered modular architecture** where each concern lives in its own module.
+
+\`\`\`
+agentic_system/
+├── app/
+│   ├── api/v1/            ← HTTP route handlers (thin controllers)
+│   ├── core/
+│   │   ├── config.py      ← Pydantic Settings (env-aware)
+│   │   ├── logging.py     ← Structured logging (structlog)
+│   │   ├── metrics.py     ← Prometheus counters/histograms
+│   │   ├── limiter.py     ← Rate limiting (SlowAPI)
+│   │   ├── langgraph/     ← Agent graph definitions
+│   │   │   └── tools/     ← Tool implementations
+│   │   └── prompts/       ← System prompts as .md files
+│   ├── models/            ← Database models (SQLModel)
+│   ├── schemas/           ← Pydantic DTOs (request/response)
+│   ├── services/          ← Business logic layer
+│   └── utils/             ← Sanitization, auth, helpers
+├── evals/                 ← Evaluation framework
+│   └── metrics/prompts/   ← LLM-as-Judge rubrics
+├── grafana/dashboards/    ← Observability dashboards
+├── prometheus/            ← Scrape configs
+├── tests/
+│   └── stress_test.py     ← Concurrent load tests
+└── .github/workflows/     ← CI/CD pipelines
+\`\`\`
+
+**The layering rule**: API routes call Services. Services call Models. Services call external APIs. Routes never touch the database directly. This makes each layer independently testable and replaceable.
+
+**Prompts as assets**: store system prompts as versioned Markdown files, not hardcoded strings. Load at runtime with dynamic injection:
+\`\`\`python
+def load_system_prompt(**kwargs) -> str:
+    prompt_path = Path(__file__).parent / "system.md"
+    template = prompt_path.read_text()
+    return template.format(
+        agent_name=settings.PROJECT_NAME,
+        current_datetime=datetime.now().isoformat(),
+        **kwargs
+    )
+\`\`\`
+Prompt engineers can iterate on \`system.md\` without touching application code. Include prompts in version control — treat a prompt change as a code change.
+
+**pyproject.toml over requirements.txt**: pin versions with \`>=\` operator. Separate runtime, dev, and test dependency groups. Use \`ruff\` + \`black\` + \`isort\` in CI to enforce code quality.`,
+      },
+      {
+        title: "Multi-Environment Config & Containerization",
+        content: `**Multi-environment configuration** with Pydantic Settings:
+\`\`\`python
+from pydantic_settings import BaseSettings
+from enum import Enum
+
+class Environment(str, Enum):
+    DEVELOPMENT = "development"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+class Settings(BaseSettings):
+    APP_ENV: Environment = Environment.DEVELOPMENT
+    DEBUG: bool = False
+    
+    # Database
+    POSTGRES_HOST: str
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str
+    POSTGRES_POOL_SIZE: int = 10
+    POSTGRES_MAX_OVERFLOW: int = 20
+    
+    # AI
+    OPENAI_API_KEY: str
+    LLM_MODEL: str = "gpt-4o-mini"
+    
+    # Rate limiting
+    RATE_LIMIT_DEFAULT: list[str] = ["100/minute"]
+    
+    # Observability
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_PUBLIC_KEY: str = ""
+    
+    class Config:
+        env_file = ".env.development"  # overridden by APP_ENV at runtime
+
+settings = Settings()
+\`\`\`
+
+**Environment files** (committed to VCS as examples, never secrets):
+\`\`\`
+.env.example         ← template with placeholders
+.env.development     ← debug=true, local DB, no rate limits
+.env.staging         ← production-like, test credentials
+.env.production      ← strict limits, real credentials, no debug
+\`\`\`
+
+**Docker Compose** (full stack for local dev):
+\`\`\`yaml
+services:
+  api:
+    build: .
+    env_file: .env.development
+    ports: ["8000:8000"]
+    depends_on: [postgres, redis]
+    volumes: ["./app:/app"]  # hot reload in dev
+  
+  postgres:
+    image: postgres:16
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    environment:
+      POSTGRES_DB: agentdb
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: secret
+  
+  redis:
+    image: redis:7-alpine
+  
+  prometheus:
+    image: prom/prometheus
+    volumes: ["./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"]
+  
+  grafana:
+    image: grafana/grafana
+    volumes: ["./grafana/dashboards:/var/lib/grafana/dashboards"]
+    ports: ["3000:3000"]
+\`\`\`
+
+**Docker best practices for AI services**:
+- Multi-stage builds: \`builder\` stage installs deps, \`runtime\` stage copies only the app
+- Non-root user in container (security)
+- Health check endpoint (\`/health\`) for Docker + Kubernetes readiness probes
+- Mount secrets from environment, never bake into image`,
+      },
+      {
+        title: "Service Layer — Connection Pooling & Circuit Breakers",
+        content: `**The connection pooling problem**: a naive implementation opens a new database connection per request. Under 100 concurrent users, each opening a connection, your PostgreSQL will hit its \`max_connections\` limit (default: 100) and start rejecting connections.
+
+**SQLAlchemy QueuePool** (the production solution):
+\`\`\`python
+from sqlalchemy.pool import QueuePool
+from sqlmodel import create_engine
+
+engine = create_engine(
+    connection_url,
+    poolclass=QueuePool,
+    pool_pre_ping=True,      # Test connection health before use
+    pool_size=10,            # Keep 10 connections permanently open
+    max_overflow=20,         # Allow 20 additional connections during spikes
+    pool_timeout=30,         # Raise error if no connection in 30s
+    pool_recycle=1800,       # Refresh connections every 30 min (prevents stale sockets)
+)
+\`\`\`
+
+Pool sizing rule of thumb:
+\`\`\`
+pool_size = min(max_postgres_connections × 0.8, expected_concurrent_requests)
+max_overflow = pool_size × 2  # burst headroom
+\`\`\`
+
+**Circuit breakers with tenacity** (retry + exponential backoff):
+\`\`\`python
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(LLMUnavailableError),
+)
+async def call_llm(prompt: str) -> str:
+    """Retry up to 3 times with exponential backoff (1s, 2s, 4s)"""
+    return await llm.ainvoke(prompt)
+\`\`\`
+
+**LLM-specific unavailability handling**:
+\`\`\`python
+try:
+    response = await call_llm(prompt)
+except openai.RateLimitError:
+    # Rate limited: wait and retry, or switch model tier
+    raise HTTPException(503, "Service temporarily at capacity")
+except openai.APIConnectionError:
+    # Network issue: retry with backoff
+    raise HTTPException(503, "LLM service unreachable")
+except openai.BadRequestError as e:
+    # Bad input (e.g., too many tokens): cannot retry, fail fast
+    raise HTTPException(400, f"Invalid request: {e}")
+\`\`\`
+
+**Rate limiting with SlowAPI**:
+\`\`\`python
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+
+@router.post("/chat")
+@limiter.limit("20/minute")   # per-IP rate limit on chat endpoint
+async def chat(request: Request, ...):
+    ...
+\`\`\`
+
+Rate limit granularity:
+- Global: protect all endpoints from abuse
+- Per-endpoint: tighter limits on expensive operations (chat: 20/min, search: 100/min)
+- Per-user: authenticated rate limits (free tier: 50/day, paid: 1000/day)`,
+      },
+      {
+        title: "Streaming — SSE for Real-Time Token Output",
+        content: `LLM responses are generated token-by-token. Buffering the full response before sending it to the user means waiting 2-30 seconds staring at a loading spinner. **Streaming** sends tokens as they are generated.
+
+**Server-Sent Events (SSE)** — the standard for LLM streaming:
+\`\`\`python
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import asyncio
+
+async def stream_tokens(prompt: str):
+    """Generator that yields tokens as SSE events"""
+    async for chunk in llm.astream(prompt):
+        token = chunk.content
+        if token:
+            # SSE format: "data: <content>\\n\\n"
+            yield f"data: {token}\\n\\n"
+    yield "data: [DONE]\\n\\n"
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    return StreamingResponse(
+        stream_tokens(request.message),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
+\`\`\`
+
+**Frontend consumption**:
+\`\`\`javascript
+const eventSource = new EventSource('/chat/stream');
+let fullResponse = '';
+
+eventSource.onmessage = (event) => {
+    if (event.data === '[DONE]') {
+        eventSource.close();
+        return;
+    }
+    fullResponse += event.data;
+    updateUI(fullResponse);  // Progressive rendering
+};
+\`\`\`
+
+**LangGraph streaming** — stream both tokens AND graph steps:
+\`\`\`python
+async def stream_agent(message: str, thread_id: str):
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    async for event in app.astream_events(
+        {"messages": [HumanMessage(message)]},
+        config=config,
+        version="v2"
+    ):
+        kind = event["event"]
+        if kind == "on_chat_model_stream":
+            # Stream individual tokens
+            yield f"data: {event['data']['chunk'].content}\\n\\n"
+        elif kind == "on_tool_start":
+            # Notify frontend which tool is being called
+            yield f"data: [TOOL:{event['name']}]\\n\\n"
+        elif kind == "on_tool_end":
+            yield f"data: [TOOL_DONE]\\n\\n"
+\`\`\`
+
+**Streaming tradeoffs**:
+- Better UX (perceived latency drops dramatically)
+- Harder to handle errors mid-stream (can't change HTTP status code after response starts)
+- Harder to cache streaming responses
+- Nginx/proxies need \`X-Accel-Buffering: no\` to not buffer chunks`,
+      },
+      {
+        title: "Observability Stack & Load Testing",
+        content: `**Prometheus + Grafana** (the production standard):
+
+Custom AI-specific metrics:
+\`\`\`python
+from prometheus_client import Counter, Histogram, Gauge
+
+# Request metrics
+http_requests_total = Counter(
+    "http_requests_total", "Total HTTP requests",
+    ["method", "endpoint", "status"]
+)
+
+# LLM-specific metrics (custom buckets — LLM is much slower than DB)
+llm_inference_duration_seconds = Histogram(
+    "llm_inference_duration_seconds", "LLM response time",
+    ["model"],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+)
+
+# Infrastructure metrics
+db_connections = Gauge("db_connections", "Active DB connections")
+agent_active_sessions = Gauge("agent_active_sessions", "Live agent sessions")
+\`\`\`
+
+**Structured logging with structlog**:
+\`\`\`python
+import structlog
+log = structlog.get_logger()
+
+# Bind context once; every subsequent log includes it
+log = log.bind(user_id="user-123", session_id="sess-456", agent_id="billing-agent")
+
+log.info("tool_called", tool="process_refund", amount=150.0)
+log.warning("rate_limit_approached", requests_remaining=5)
+log.error("llm_error", model="gpt-4o", error_type="RateLimitError")
+\`\`\`
+
+Output is machine-parseable JSON — query in Datadog/Grafana Loki/CloudWatch.
+
+**Langfuse** for LLM-specific tracing:
+\`\`\`python
+from langfuse import Langfuse
+langfuse = Langfuse()
+
+trace = langfuse.trace(name="billing-agent", user_id=user_id)
+span = trace.span(name="llm-call", input=prompt)
+# ... LLM call ...
+span.end(output=response, usage={"tokens": 342})
+\`\`\`
+Langfuse gives you: latency per trace, token cost per session, LLM-as-Judge scores, session replay.
+
+**Load testing** — proving the system works under concurrent load:
+\`\`\`python
+import asyncio
+import httpx
+
+async def single_user(client, token):
+    response = await client.post("/api/v1/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "What is my account balance?"},
+        timeout=60.0
+    )
+    return response.status_code, response.elapsed.total_seconds()
+
+async def stress_test(concurrent_users=1500):
+    async with httpx.AsyncClient(base_url="http://server:8000") as client:
+        tasks = [single_user(client, f"token-{i}") for i in range(concurrent_users)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    success = sum(1 for r in results if isinstance(r, tuple) and r[0] == 200)
+    errors = [r for r in results if isinstance(r, Exception)]
+    latencies = [r[1] for r in results if isinstance(r, tuple)]
+    
+    print(f"Success: {success}/{concurrent_users}")
+    print(f"p50: {sorted(latencies)[len(latencies)//2]:.2f}s")
+    print(f"p99: {sorted(latencies)[int(len(latencies)*0.99)]:.2f}s")
+
+asyncio.run(stress_test(1500))
+\`\`\`
+
+**What to look for in load test results**:
+- Connection pool exhaustion (DB connections = 0 errors)
+- LLM rate limit cascade (429 errors appearing under load)
+- p99 latency spike (fine at p50, broken at p99 = resource contention)
+- Memory leak (RSS memory growing steadily under constant load)
+
+**CI/CD pipeline for AI systems** (GitHub Actions):
+\`\`\`yaml
+on: [pull_request]
+jobs:
+  test:
+    steps:
+      - run: pytest tests/ -m "not slow"
+      - run: ruff check app/
+      - run: black --check app/
+  eval:
+    steps:
+      - run: python evals/run_evals.py  # LLM-as-Judge on test set
+      - run: python evals/check_regression.py  # Fail if quality drops >5%
+  deploy:
+    needs: [test, eval]
+    steps:
+      - run: docker build -t registry/agent:$GITHUB_SHA .
+      - run: docker push registry/agent:$GITHUB_SHA
+\`\`\`
+
+The eval step is the critical addition for AI CI/CD — run your LLM-as-Judge suite on every PR and fail the build if quality drops below threshold.`,
+      },
+    ],
+  },
 ];

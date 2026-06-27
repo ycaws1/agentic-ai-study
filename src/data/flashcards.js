@@ -717,6 +717,48 @@ export const flashcards = [
     answer: "Must capture per event:\n• event_id, timestamp, session_id, user_id, tenant_id\n• agent_id, agent_version, model name\n• action type (tool_call, llm_inference, guardrail_trigger)\n• tool_name and parameters (sanitized)\n• guardrail check results (injection_scan, pii_scan, authz_check)\n• token counts, latency_ms, trace_id for distributed tracing\n\nMust NEVER include:\n• Raw PII (SSN, credit card, health data)\n• Credentials or API keys\n• Full prompt/response verbatim (if contains PII)\n• Patient health data in plaintext (HIPAA)\n\nImmutability: audit logs must be append-only and tamper-evident (S3 Object Lock, GCS Object Hold). An agent that can delete its own audit trail is a security violation.\n\nRetention:\n• General: 90-180 days hot, 7 years cold\n• Financial (SOX): 7 years\n• Healthcare (HIPAA): 6 years\n• EU AI Act high-risk: 10 years\n\nAlert on: permission denied spikes, unusual tool patterns, PII detection rate change, high-value action spikes.",
     difficulty: "medium",
   },
+  {
+    id: 105,
+    category: "LangGraph & Stateful Agents",
+    question: "What are the core primitives of LangGraph and how do they relate to each other?",
+    answer: "LangGraph models agent execution as a directed graph:\n\n• State — TypedDict shared across all nodes. Each field has a merge strategy (e.g., Annotated[List, operator.add] = append; plain field = replace).\n\n• Nodes — plain Python functions that take state and return partial state updates. An LLM call, a tool call, or a human review checkpoint is a node.\n\n• Edges — transitions between nodes. Can be unconditional (add_edge) or conditional (add_conditional_edges, where a routing function reads state and returns the next node name).\n\n• Checkpointer — persistence layer (PostgresSaver, RedisSaver). After every node, full state is saved. On restart, graph resumes from last checkpoint keyed by thread_id.\n\nKey advantage over chains: LangGraph supports cycles. An agent can call a tool, reason about the result, call another tool, and loop until a termination condition — all within one stateful execution.",
+    difficulty: "medium",
+  },
+  {
+    id: 106,
+    category: "LangGraph & Stateful Agents",
+    question: "How does LangGraph implement human-in-the-loop and why is checkpointing required for it?",
+    answer: "Human-in-the-loop (HITL) in LangGraph uses interrupt_before:\n\napp = graph.compile(\n    checkpointer=checkpointer,\n    interrupt_before=['approval_node']  # pause before this node\n)\n\n1. First invoke: graph runs until the interrupt point, saves full state to checkpointer\n2. Execution stops — server can shut down, hours can pass\n3. Human reviews and makes a decision\n4. Second invoke with same thread_id: graph resumes from checkpoint with human input\n\nWhy checkpointing is required: without persistence, state lives only in memory. A server restart between the first and second invoke would lose all agent progress. PostgresSaver ensures the state survives any downtime.\n\nThread model: each unique thread_id is an independent conversation. Resuming a thread_id continues exactly where it stopped, with full history preserved.",
+    difficulty: "hard",
+  },
+  {
+    id: 107,
+    category: "LangGraph & Stateful Agents",
+    question: "What is the difference between short-term and long-term memory in a LangGraph agent?",
+    answer: "Short-term memory (conversation history):\n• Stored in agent State as the messages list\n• Persisted per session via checkpointer (thread_id)\n• Only available within the same session\n• Automatically grows with each turn\n\nLong-term memory (user/world knowledge):\n• Stored in external memory store (mem0, PostgreSQL, vector DB)\n• Survives across sessions and server restarts\n• Queried at the start of each turn and injected into system prompt\n• Examples: 'User prefers concise answers', 'User is building a billing system'\n\nmem0 pattern:\nmemory.search(query=message, user_id=user_id)  # retrieve\nmemory.add(messages, user_id=user_id)          # store new facts\n\nThe combination: LangGraph manages the within-session stateful loop (short-term), while mem0/vector DB provides cross-session knowledge (long-term).",
+    difficulty: "medium",
+  },
+  {
+    id: 108,
+    category: "Production Engineering for AI",
+    question: "Why is connection pooling critical for AI services and how do you configure it?",
+    answer: "Without connection pooling, each HTTP request opens a new database connection. Under 100 concurrent users, PostgreSQL hits its max_connections limit (default: 100) and starts rejecting connections.\n\nSQLAlchemy QueuePool configuration:\nengine = create_engine(\n    url,\n    poolclass=QueuePool,\n    pool_pre_ping=True,     # health check before use\n    pool_size=10,           # permanent connections\n    max_overflow=20,        # burst headroom\n    pool_timeout=30,        # fail fast if pool exhausted\n    pool_recycle=1800,      # refresh stale sockets every 30min\n)\n\nSizing rule:\npool_size = min(postgres_max_connections × 0.8, expected_concurrency)\nmax_overflow = pool_size × 2\n\nThis is always caught in load testing: the system works fine at 10 users, crashes at 100. Always load test at your expected peak concurrency before production.",
+    difficulty: "medium",
+  },
+  {
+    id: 109,
+    category: "Production Engineering for AI",
+    question: "How do you implement retry and circuit breaker logic for LLM calls?",
+    answer: "Use tenacity for retry with exponential backoff:\n\n@retry(\n    stop=stop_after_attempt(3),\n    wait=wait_exponential(multiplier=1, min=1, max=10),\n    retry=retry_if_exception_type(RateLimitError),\n)\nasync def call_llm(prompt):\n    return await llm.ainvoke(prompt)\n\nException handling strategy:\n• RateLimitError (429): retry with backoff — temporary overload\n• APIConnectionError: retry with backoff — network flicker\n• BadRequestError (400): fail fast — bad input, retrying wastes resources\n• Timeout: retry once, then fail — LLM is overloaded\n\nCircuit breaker: after N consecutive failures, open the circuit and reject requests immediately (fail fast) rather than queuing more. Reset after a cooldown period. Prevents cascading failures where LLM slowness causes a thundering herd of retries.\n\nKey distinction: retry = handle transient errors; circuit breaker = stop hammering a failing dependency.",
+    difficulty: "hard",
+  },
+  {
+    id: 110,
+    category: "Production Engineering for AI",
+    question: "What is SSE streaming for LLM responses and how is it implemented?",
+    answer: "SSE (Server-Sent Events) streams LLM tokens to the client as they are generated, instead of buffering the full response (which takes 2-30 seconds).\n\nFastAPI implementation:\nasync def stream_tokens(prompt):\n    async for chunk in llm.astream(prompt):\n        if chunk.content:\n            yield f'data: {chunk.content}\\n\\n'  # SSE format\n    yield 'data: [DONE]\\n\\n'\n\n@router.post('/chat/stream')\nasync def chat_stream(request):\n    return StreamingResponse(\n        stream_tokens(request.message),\n        media_type='text/event-stream',\n        headers={'X-Accel-Buffering': 'no'}  # disable nginx buffering\n    )\n\nKey requirements:\n• X-Accel-Buffering: no — prevents nginx from buffering chunks\n• Cache-Control: no-cache — prevents proxy caching\n• Media type: text/event-stream\n\nTradeoffs:\n✓ Dramatically improves perceived latency\n✗ Cannot change HTTP status code after streaming starts (mid-stream errors are hard)\n✗ Harder to cache\n✗ Requires client-side EventSource/fetch reader",
+    difficulty: "medium",
+  },
 ];
 
 export const categories = [...new Set(flashcards.map(f => f.category))];

@@ -1349,4 +1349,97 @@ On the regulatory side: enterprises in the EU need to comply with the AI Act, wh
       },
     ],
   },
+  {
+    id: "langgraph-design",
+    category: "LangGraph & Stateful Agents",
+    question: "Walk me through how you'd design a stateful multi-agent workflow using LangGraph for an enterprise use case.",
+    difficulty: "hard",
+    sections: [
+      {
+        title: "The Architecture",
+        content: `"I'll use an enterprise research and report generation workflow as the example — a user submits a topic, the system plans, researches, drafts, and returns a cited report.
+
+**State design first** — the State TypedDict is the contract between all nodes:
+\`\`\`python
+class ResearchState(TypedDict):
+    topic: str
+    plan: list[str]
+    messages: Annotated[list, operator.add]  # append-only
+    research_findings: dict[str, str]        # sub-topic → summary
+    draft: str
+    human_approved: bool
+    step_count: int
+\`\`\`
+
+**Graph structure**:
+\`\`\`
+[planner_node] → [research_fanout] → parallel [worker_nodes] → [aggregator] → [drafter] → [human_review] → [END]
+\`\`\`
+
+**Key design decisions**:
+
+1. **Fan-out with Send()** for parallel research sub-tasks: the planner produces N sub-questions; Send() dispatches each to a worker node concurrently. This is critical for performance — researching 5 sub-topics in parallel vs. sequentially is a 5× speedup.
+
+2. **Checkpointing with PostgresSaver**: every node completion writes to PostgreSQL. If the server restarts during a 20-minute research run, the graph resumes from the last saved step without losing work.
+
+3. **Human-in-the-loop at draft review**: compile with \`interrupt_before=['human_review']\`. The draft is presented to a human, execution pauses (could be hours), then resumes with the approval decision baked into state.
+
+4. **Long-term memory with mem0**: at the start of each session, query mem0 for facts about the user. After session completion, extract and store key preferences and past research topics.
+
+The entire execution is one invocation from the application's perspective — LangGraph manages the orchestration, state passing, persistence, and resume logic internally."`,
+      },
+      {
+        title: "Tradeoffs vs. a Custom Loop",
+        content: `"The main benefit of LangGraph over a hand-rolled loop: I get checkpointing, HITL interrupts, and streaming for free. Building those three things from scratch in a custom loop would be weeks of work and likely buggy.
+
+The costs: the graph abstraction adds cognitive overhead — every developer needs to understand StateGraph, nodes, edges, and the merge semantics for State fields. A poorly designed State schema becomes a maintenance burden as the team adds features.
+
+My rule: use LangGraph when you need ANY of: persistence across restarts, HITL interrupts, or streaming step events. For simple single-turn agents without those requirements, a plain async function calling the LLM API is cleaner and easier to debug.
+
+For the LangGraph vs. AutoGen vs. CrewAI question: LangGraph wins on production maturity, checkpointing, and streaming. AutoGen is better for research prototypes where you want agents to converse freely. CrewAI is more readable for simple role-based delegation but has limited flexibility for complex conditional workflows."`,
+      },
+    ],
+  },
+  {
+    id: "production-engineering-interview",
+    category: "Production Engineering for AI",
+    question: "How do you make an agentic AI system production-ready — what are the key engineering concerns beyond getting it to work?",
+    difficulty: "hard",
+    sections: [
+      {
+        title: "The Production Checklist",
+        content: `"Getting an agent to work in a Jupyter notebook is very different from running it reliably for 10,000 users. The key concerns I address systematically:
+
+**1. Connection pooling**: a new DB connection per request kills your PostgreSQL under any real load. I configure QueuePool with pool_size = ~80% of postgres max_connections, max_overflow = 2× pool_size, pool_pre_ping=True. Always validated via load test.
+
+**2. LLM unavailability handling**: LLM APIs have rate limits, network flickers, and maintenance windows. Every LLM call is wrapped in tenacity retry with exponential backoff (3 attempts, 1s/2s/4s). Distinguish retryable errors (rate limit, connection) from non-retryable ones (bad request, invalid API key).
+
+**3. Rate limiting**: SlowAPI on every endpoint. Per-IP for anonymous endpoints, per-user-token for authenticated. Tighter limits on expensive operations (chat: 20/min) vs. cheap ones (session list: 200/min).
+
+**4. Streaming**: never buffer LLM responses. SSE streaming with FastAPI's StreamingResponse. Set X-Accel-Buffering: no for nginx to not buffer chunks. This is the single biggest UX improvement for any chat-based interface.
+
+**5. Structured logging**: structlog over print(). Bind user_id + session_id + agent_id to every log. Output machine-parseable JSON. This is what makes incidents debuggable at 3am.
+
+**6. Prometheus metrics**: http_requests_total + http_request_duration_seconds for standard metrics. Add LLM-specific: llm_inference_duration_seconds (custom buckets 0.1-30s), llm_token_cost, agent_active_sessions. Wire to Grafana dashboards.
+
+**7. Multi-environment config**: Pydantic Settings reading from .env.development / .env.staging / .env.production. Never hardcode configuration. Secrets from environment variables or a vault, never in code or Docker images.
+
+**8. CI/CD with eval gate**: GitHub Actions runs unit tests + ruff linting + my LLM-as-Judge eval suite on every PR. The eval step fails the build if quality drops >5% from baseline. This is the critical addition for AI CI/CD that pure software CI/CD doesn't have."`,
+      },
+      {
+        title: "Load Testing & Observing Under Stress",
+        content: `"I always run a load test before calling something production-ready. For agentic systems, the failures under load are different from standard web services:
+
+**Database connection exhaustion**: symptoms are errors that appear only above a certain concurrency threshold, all saying 'QueuePool limit reached'. Fix: increase pool_size or reduce max_connections per query (use shorter transactions).
+
+**LLM rate limit cascade**: under high load, many concurrent users hit the same OpenAI rate limit simultaneously. Each gets a 429, triggers a retry with backoff, but the backoff doesn't include jitter — so all retries fire at the same moment, causing another rate limit hit. Fix: add jitter to backoff (\`wait_random(0, 2) + wait_exponential(...)\`).
+
+**p99 latency spike**: p50 is fine (2s) but p99 is catastrophic (45s). Usually means resource contention — either the connection pool is blocking requests, or the LLM is queuing under load. Investigate with Prometheus histograms broken down by endpoint.
+
+**Memory leak**: RSS grows steadily over hours under constant load. Common in Python with large conversation histories that aren't GC'd. Add explicit context compaction and monitor RSS via Prometheus process_resident_memory_bytes.
+
+The load test itself is a script using asyncio.gather() with 500-1500 concurrent tasks. Run it from a cloud VM (not localhost — your laptop's network stack becomes the bottleneck). An AWS m6i.xlarge (4vCPU, 16GB) gives you enough horsepower to actually generate representative load."`,
+      },
+    ],
+  },
 ];
